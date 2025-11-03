@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Minimal To‑Do Notifier</title>
+  <style>
+    /* Microsoft-style dark minimalist */
+    :root{
+      --bg:#0f1720; /* near black */
+      --panel:#111820;
+      --muted:#94a3b8;
+      --accent:#0078d4; /* fluent blue */
+      --accent-2:#106ebe;
+      --success:#28a745;
+      --danger:#e53935;
+      --card:#0b1220;
+      --glass: rgba(255,255,255,0.02);
+    }
+    html,body{height:100%;}
+    body{
+      margin:0;
+      font-family: "Segoe UI", Roboto, system-ui, -apple-system, "Helvetica Neue", Arial;
+      background: linear-gradient(180deg,var(--bg),#071018);
+      color:#e6eef8;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+    }
+
+    .app{
+      width:420px;
+      max-width:96vw;
+      background:linear-gradient(180deg,var(--panel),#081016);
+      border-radius:12px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.6);
+      padding:18px;
+      border:1px solid rgba(255,255,255,0.03);
+    }
+
+    header{
+      display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;
+    }
+    h1{font-size:18px;margin:0;font-weight:600;letter-spacing:0.2px}
+    .subtitle{font-size:12px;color:var(--muted)}
+
+    .controls{display:flex;gap:8px;margin-bottom:12px}
+    input[type=text]{flex:1;background:var(--glass);border:1px solid rgba(255,255,255,0.03);padding:10px;border-radius:8px;color:inherit;outline:none}
+    select{background:transparent;border:1px solid rgba(255,255,255,0.04);padding:8px;border-radius:8px;color:inherit}
+    button.btn{background:var(--accent);border:none;padding:10px 12px;border-radius:8px;color:white;font-weight:600;cursor:pointer}
+    button.ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);padding:8px 10px;border-radius:8px;color:var(--muted);cursor:pointer}
+
+    ul.tasks{list-style:none;padding:0;margin:0;max-height:320px;overflow:auto}
+    li.task{
+      display:flex;align-items:center;justify-content:space-between;padding:10px;border-radius:8px;margin-bottom:8px;background:linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.008));border:1px solid rgba(255,255,255,0.02)
+    }
+    .task .left{display:flex;gap:10px;align-items:center}
+    .task .title{font-size:14px}
+    .task .meta{font-size:12px;color:var(--muted)}
+    .done-btn{background:var(--success);border:none;color:#051014;padding:6px 10px;border-radius:8px;cursor:pointer;font-weight:600}
+    .remove{background:transparent;border:none;color:var(--muted);cursor:pointer;margin-left:8px}
+
+    .footer{display:flex;align-items:center;justify-content:space-between;margin-top:12px}
+    .note{font-size:12px;color:var(--muted)}
+
+    .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:28px;background:#0c1620;padding:10px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.03);color:var(--muted);box-shadow:0 6px 20px rgba(0,0,0,0.6)}
+
+    /* small screens adjustments */
+    @media (max-width:480px){.app{width:96vw;padding:14px}}
+  </style>
+</head>
+<body>
+  <div class="app" role="application">
+    <header>
+      <div>
+        <h1>Quick Remind — To‑Do</h1>
+        <div class="subtitle">Temporary session • minimalist dark</div>
+      </div>
+      <div style="text-align:right">
+        <div class="subtitle">Reminders: <span id="status-interval">Off</span></div>
+      </div>
+    </header>
+
+    <div class="controls">
+      <input id="taskInput" type="text" placeholder="Add a quick task... e.g. <ticket number> No case notes" />
+      <button id="addBtn" class="btn">Add</button>
+    </div>
+
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center">
+      <label class="subtitle" style="min-width:55px">Interval</label>
+      <select id="intervalSelect" aria-label="Reminder interval">
+        <option value="10">10 minutes</option>
+        <option value="30">30 minutes</option>
+      </select>
+      <button id="startBtn" class="ghost" style="margin-left:auto">Start Reminders</button>
+      <button id="stopBtn" class="ghost">Stop</button>
+    </div>
+
+    <ul id="tasks" class="tasks" aria-live="polite"></ul>
+
+    <div class="footer">
+      <div class="note">Reminders use browser notifications while the page is open/minimized.</div>
+      <div>
+        <button id="clearBtn" class="ghost">Clear All</button>
+      </div>
+    </div>
+
+    <div id="toast" class="toast" style="display:none"></div>
+  </div>
+
+  <script>
+    // In-memory tasks only (resets on close)
+    const tasks = [];
+    let reminderIntervalId = null;
+
+    const $ = id => document.getElementById(id);
+    const taskInput = $('taskInput');
+    const addBtn = $('addBtn');
+    const tasksList = $('tasks');
+    const intervalSelect = $('intervalSelect');
+    const startBtn = $('startBtn');
+    const stopBtn = $('stopBtn');
+    const clearBtn = $('clearBtn');
+    const toast = $('toast');
+    const statusInterval = $('status-interval');
+
+    function render() {
+      tasksList.innerHTML = '';
+      if(tasks.length === 0){
+        const el = document.createElement('div');
+        el.className = 'subtitle';
+        el.style.padding = '18px';
+        el.style.textAlign = 'center';
+        el.textContent = 'No tasks yet — add one above.';
+        tasksList.appendChild(el);
+        return;
+      }
+
+      tasks.forEach((t, i) => {
+        const li = document.createElement('li');
+        li.className = 'task';
+
+        const left = document.createElement('div');
+        left.className = 'left';
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = t.text;
+        if(t.done){ title.style.textDecoration = 'line-through'; title.style.opacity = '0.6'; }
+
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        meta.textContent = t.done ? 'Done' : 'Pending';
+
+        left.appendChild(title);
+        left.appendChild(meta);
+
+        const right = document.createElement('div');
+
+        if(!t.done){
+          const doneBtn = document.createElement('button');
+          doneBtn.className = 'done-btn';
+          doneBtn.textContent = 'Done';
+          doneBtn.onclick = () => markDone(i);
+          right.appendChild(doneBtn);
+        }
+
+        const remove = document.createElement('button');
+        remove.className = 'remove';
+        remove.textContent = '✕';
+        remove.title = 'Remove task';
+        remove.onclick = () => removeTask(i);
+        right.appendChild(remove);
+
+        li.appendChild(left);
+        li.appendChild(right);
+        tasksList.appendChild(li);
+      });
+    }
+
+    function addTask(text){
+      if(!text || !text.trim()) return showToast('Type a task first');
+      tasks.push({text: text.trim(), done: false, added: Date.now()});
+      render();
+      taskInput.value = '';
+    }
+
+    function markDone(index){
+      tasks[index].done = true;
+      render();
+      checkAllDone();
+    }
+
+    function removeTask(index){
+      tasks.splice(index,1);
+      render();
+      checkAllDone();
+    }
+
+    function clearAll(){
+      tasks.length = 0;
+      render();
+      checkAllDone();
+    }
+
+    function showToast(msg, ms=2200){
+      toast.textContent = msg; toast.style.display='block';
+      setTimeout(()=>{ toast.style.display='none'; }, ms);
+    }
+
+    addBtn.addEventListener('click', ()=> addTask(taskInput.value));
+    taskInput.addEventListener('keydown', (e)=>{ if(e.key === 'Enter') addTask(taskInput.value); });
+    clearBtn.addEventListener('click', ()=> clearAll());
+
+    startBtn.addEventListener('click', async ()=>{
+      if(Notification.permission === 'default'){
+        try{ await Notification.requestPermission(); }catch(e){}
+      }
+      if(Notification.permission !== 'granted'){
+        showToast('Notification permission not granted — reminders may not show.');
+      }
+      startReminders();
+    });
+
+    stopBtn.addEventListener('click', ()=> stopReminders());
+
+    intervalSelect.addEventListener('change', ()=>{
+      if(reminderIntervalId) restartReminders();
+    });
+
+    function startReminders(){
+      stopReminders();
+      const minutes = Number(intervalSelect.value) || 10;
+      statusInterval.textContent = minutes + ' min';
+      reminderIntervalId = setInterval(()=> sendReminder(), minutes * 60 * 1000);
+      // trigger a first immediate reminder so user can grant permission and see it right away
+      sendReminder(true);
+      showToast('Reminders started — every ' + minutes + ' minutes');
+    }
+
+    function stopReminders(){
+      if(reminderIntervalId) clearInterval(reminderIntervalId);
+      reminderIntervalId = null;
+      statusInterval.textContent = 'Off';
+      showToast('Reminders stopped');
+    }
+
+    function restartReminders(){
+      stopReminders();
+      startReminders();
+    }
+
+    function pendingTasks(){
+      return tasks.filter(t=>!t.done);
+    }
+
+    function sendReminder(first=false){
+      const pending = pendingTasks();
+      if(pending.length === 0){
+        // nothing to remind; stop reminders automatically
+        if(reminderIntervalId){
+          stopReminders();
+          // small notification to say all tasks complete
+          if(Notification.permission === 'granted') new Notification('All tasks complete — reminders stopped');
+        }
+        return;
+      }
+
+      const title = first ? 'Reminder started' : 'Reminder';
+      const bodyLines = pending.slice(0,3).map((t,i)=> (i+1)+'. ' + t.text);
+      if(pending.length > 3) bodyLines.push('\n+' + (pending.length - 3) + ' more');
+      const body = bodyLines.join('\n');
+
+      // Browser Notification
+      if(Notification.permission === 'granted'){
+        try{
+          const n = new Notification(title + ' — ' + pending.length + ' pending', { body });
+          // clicking the notification focuses the window
+          n.onclick = () => { window.focus(); };
+        }catch(e){ console.warn(e); }
+      }
+
+      // in-page fallback for denied permission
+      if(Notification.permission !== 'granted'){
+        showToast('Reminder: You have ' + pending.length + ' pending tasks');
+      }
+    }
+
+    function checkAllDone(){
+      if(pendingTasks().length === 0 && reminderIntervalId){
+        // handled inside sendReminder as well, but double-check
+        stopReminders();
+      }
+    }
+
+    // Render initial empty state
+    render();
+
+    // UX: show a quick hint when page first loads
+    window.addEventListener('load', ()=>{
+      setTimeout(()=> showToast('Tip: Click "Start Reminders" to enable browser notifications'), 500);
+    });
+
+    // Warn user that notifications stop when the page is closed
+    window.addEventListener('beforeunload', ()=>{
+      // no-op: tasks reset on close (in-memory)
+    });
+  </script>
+</body>
+</html>
